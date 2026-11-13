@@ -1,237 +1,239 @@
 # ida-cli
 
-一个 Go 单文件可执行程序：**命令行客户端 + 内嵌 Broker + IDA 插件安装器**。
+[**English**](README.md) | [简体中文](README_zh.md)
 
-用户侧只需要 `ida-cli.exe` 这一个文件。它把原来分散的 Python Broker、MCP 路由层和 CLI 合并掉，并把自己内嵌的 IDA 插件写入 IDA 的用户插件目录。运行时只剩两样东西：
+A single-binary Go executable: **command-line client + embedded broker + IDA plugin installer**.
+
+Users only need the one file `ida-cli.exe`. It replaces the previously separate Python broker, MCP routing layer, and CLI, and writes its own embedded IDA plugin into IDA's user plugins directory. At runtime only two pieces remain:
 
 ```
-Agent / 终端 --bash--> ida-cli.exe
-                         │
-                         ├─ 默认命令：CLI，按需查询工具、发 JSON-RPC
-                         └─ `ida-cli serve`：内嵌 Go Broker（127.0.0.1:13337）
-                                                   ▲ SSE / HTTP
-                                                   │
-                                    IDA 插件（Python，运行在 IDA 进程内）
+Agent / terminal --bash--> ida-cli.exe
+                             │
+                             ├─ default command: CLI, discovers tools on demand, sends JSON-RPC
+                             └─ `ida-cli serve`: embedded Go broker (127.0.0.1:13337)
+                                                       ▲ SSE / HTTP
+                                                       │
+                                        IDA plugin (Python, runs inside the IDA process)
 ```
 
-| 组件 | 位置 | 说明 |
+| Component | Location | Description |
 |---|---|---|
-| `ida-cli.exe` | PATH 任意位置 | CLI + Broker + 插件安装器，单文件 |
-| IDA 插件 | `%APPDATA%\Hex-Rays\IDA Pro\plugins` | 由 `ida-cli install` 写入；运行在 IDA 内 |
-| Python | IDA 自带 | 只在 IDA 进程内使用，不需要 pip 安装任何东西 |
+| `ida-cli.exe` | anywhere on `PATH` | CLI + broker + plugin installer, single file |
+| IDA plugin | `%APPDATA%\Hex-Rays\IDA Pro\plugins` | written by `ida-cli install`; runs inside IDA |
+| Python | bundled with IDA | used only inside the IDA process; no pip install needed |
 
-不需要 Python Broker，不需要 MCP 客户端配置，也不需要 `pip install ida-pro-mcp`。
+No Python broker, no MCP client configuration, and no `pip install ida-pro-mcp` required.
 
-## 硬边界
+## Hard boundary
 
-IDA 不提供可从外部嵌入的远程 API。真正调用 IDA SDK 的代码必须跑在 IDA 进程里，因此**插件本身只能是 Python（或原生 C++ 插件）**，不可能编进 Go exe。能收进 exe 的是：
+IDA does not expose an embeddable remote API from outside. Code that actually calls the IDA SDK must run inside the IDA process, so **the plugin itself can only be Python (or a native C++ plugin)**; it cannot be compiled into the Go exe. What can live inside the exe is:
 
-- Broker 的全部 HTTP/SSE 协议；
-- CLI 与工具目录；
-- 插件文件本身（`go:embed`）。
+- the broker's entire HTTP/SSE protocol;
+- the CLI and the tool catalog;
+- the plugin files themselves (`go:embed`).
 
-所以“一个 exe”的准确含义是：**一个可执行文件完成部署和驱动，IDA 侧代码由它自动安装**。IDA 仍然是宿主，Python 仍由 IDA 提供。
+So "one exe" precisely means: **one executable handles deployment and driving, and it auto-installs the IDA-side code**. IDA remains the host, and Python is still provided by IDA.
 
-## 为什么省掉 Python Broker
+## Why drop the Python broker
 
-原架构里 Python Broker 只做四件事：登记 IDA 实例、用 SSE 把 JSON-RPC 推给插件、等待插件回包、给 CLI 提供查询接口。这些逻辑与 IDA 无关，已用 Go 在 `internal/broker/server.go` 中等价实现，协议与上游 `broker/server.py` 完全兼容：
+In the original architecture, the Python broker did four things: register IDA instances, push JSON-RPC to the plugin over SSE, wait for the plugin's reply, and expose query endpoints to the CLI. None of that is IDA-specific, and it has been reimplemented in Go in `internal/broker/server.go`, wire-compatible with the upstream `broker/server.py`:
 
 ```text
-POST /register     插件注册，返回 client_id
-GET  /events       SSE：connected / request / ping
-POST /response     插件回包
-POST /api/request  CLI 发请求，支持 instance_id 与 timeout
+POST /register     plugin registration, returns client_id
+GET  /events       SSE: connected / request / ping
+POST /response     plugin reply
+POST /api/request  CLI request, supports instance_id and timeout
 GET  /api/instances
 GET  /status
 ```
 
-同一 `instance_id` 重连会替换旧连接；多实例必须显式指定；超时返回 `{"response": null}`；实例断开会让在途请求立即失败。这些行为与上游一致。
+Reconnecting with the same `instance_id` replaces the old connection; multiple instances must be selected explicitly; timeouts return `{"response": null}`; a disconnected instance fails in-flight requests immediately. These behaviors match upstream.
 
-## 构建
+## Build
 
-要求 Go 1.26+。
+Requires Go 1.26+.
 
 ```bash
 cd ida-cli
 go build -trimpath -ldflags "-s -w" -o ida-cli.exe ./cmd/ida-cli
-# 或
+# or
 make build
 ```
 
-把 `ida-cli.exe` 放到 `PATH` 上的任意目录即可。二进制自带 34 个 Python 插件文件（约 660 KB），构建时无需 Python。
+Put `ida-cli.exe` anywhere on `PATH`. The binary embeds 34 Python plugin files (~660 KB); Python is not needed at build time.
 
-## 快速开始
+## Quick start
 
 ```powershell
-# 1. 安装插件（一次即可；写入 IDA 用户插件目录）
+# 1. Install the plugin (once; writes to IDA's user plugins directory)
 ida-cli install
 
-# 2. 启动内嵌 Broker，保持这个终端运行
+# 2. Start the embedded broker and keep this terminal open
 ida-cli serve
 
-# 3. 打开 IDA 和目标文件（也可手动打开；插件会自动连接）
+# 3. Open IDA with the target file (you can also open it manually; the plugin connects automatically)
 ida-cli open C:\samples\target.exe
 
-# 4. 另开终端验证
+# 4. In another terminal, verify
 ida-cli doctor
 ida-cli instances
 ida-cli survey survey_binary
 ida-cli analysis decompile --addr main --max-bytes 20000
 ```
 
-`ida-cli open` 会自己找 `ida.exe` / `ida64.exe`，以独立进程启动 GUI IDA 并加载目标；如果插件需要手动连接，在 IDA 里按 Ctrl+Alt+M。`serve` 必须先启动，否则 `open` 会在启动前报错退出，不会留下一个连不上的 IDA。
+`ida-cli open` locates `ida.exe` / `ida64.exe` by itself, launches GUI IDA as a detached process, and loads the target; if the plugin needs a manual nudge, press Ctrl+Alt+M in IDA. `serve` must be running first — otherwise `open` fails before launching anything and never leaves behind an IDA that cannot connect.
 
-`ida-cli serve` 默认监听 `127.0.0.1:13337`，内嵌插件也连接这个地址，正常使用不要改端口。`--port` / `--host` 只用于测试或你自行修改了插件里的 `DEFAULT_SERVER_URL`；改了端口后 CLI 还要用 `--broker` 或 `IDA_MCP_BROKER_URL` 指向同一地址。
+`ida-cli serve` listens on `127.0.0.1:13337` by default, and the embedded plugin connects to the same address. Do not change the port for normal use. `--port` / `--host` are only for testing or when you have changed `DEFAULT_SERVER_URL` in the plugin; after changing the port, point the CLI at the same address with `--broker` or `IDA_MCP_BROKER_URL`.
 
-## 从旧安装迁移
-
-如果之前用 `ida-pro-mcp --install` 装过插件，`%APPDATA%\Hex-Rays\IDA Pro\plugins` 里的 `ida_mcp.py` / `ida_mcp` 通常是指向 site-packages 的符号链接。运行 `ida-cli install` 会：
-
-- 删除这两个符号链接（不会删除它们指向的 Python 包）；
-- 写入 exe 内嵌的真实文件，并补上 `broker/`。
-
-之后 MCP 客户端配置里的 `ida-pro-mcp` 条目可以删除，`ida-cli` 不再需要它。若要回退，运行上游 `ida-pro-mcp --install` 重新建立符号链接即可。
-
-## 命令
+## Commands
 
 ```text
-ida-cli [全局参数] <命令>
+ida-cli [global flags] <command>
 
-部署与运行：
-  install [--dir PATH]         安装内嵌 IDA 插件（默认 IDA 用户插件目录）
-  uninstall [--dir PATH]       卸载插件
-  serve [--host H] [--port N]  启动内嵌 Broker（无 Python Broker / MCP）
+Deployment and runtime:
+  install [--dir PATH]         install the embedded IDA plugin (default: IDA user plugins dir)
+  uninstall [--dir PATH]       uninstall the plugin
+  serve [--host H] [--port N]  start the embedded broker (no Python broker / MCP)
   open <binary|idb> [--ida PATH] [--wait 60] [--force] [--dry-run]
-                               自动找到 IDA、启动 GUI 并加载目标文件
-  doctor                       体检 Broker、实例、插件安装、IDA 可执行文件
-  version                      版本、工具目录与插件快照
+                               find IDA, launch the GUI, and load the target
+  doctor                       check broker, instances, plugin install, and IDA executable
+  version                      version, tool catalog, and plugin snapshot
 
-发现类：
-  instances [--json]           列出已连接实例
-  status                       Broker 可达性与实例数
-  tools [group] [--json]       紧凑工具索引
-  schema <tool>...             工具 JSON Schema（按需）
-  help [tool|group]            帮助
+Discovery:
+  instances [--json]           list connected instances
+  status                       broker reachability and instance count
+  tools [group] [--json]       compact tool index
+  schema <tool>...             tool JSON schema (on demand)
+  help [tool|group]            help
 
-调用类：
-  resource <uri>               读取 ida:// 资源
+Invocation:
+  resource <uri>               read an ida:// resource
   call <tool> --args-json '<json>' | --arg k=v ...
   <group> <tool> [--param value ...]
 ```
 
-### 自动打开 IDA（`open`）
+### Automatic IDA launch (`open`)
 
 ```bash
 ida-cli open C:\samples\target.exe
 ida-cli open C:\samples\target.exe --wait 120
 ida-cli open --ida "D:\IDAPro9.3\ida93\portable_win\ida.exe" target.exe
-ida-cli open target.exe --dry-run          # 只打印解析结果，不启动
+ida-cli open target.exe --dry-run          # print the resolved paths only; do not launch
 ```
 
-IDA 可执行文件的查找顺序：
+IDA executable lookup order:
 
-1. `--ida PATH`（文件或安装目录都行）；
-2. 环境变量 `IDADIR`；
-3. `PATH` 上的 `ida64.exe` / `ida.exe`；
-4. `Program Files`、`LOCALAPPDATA`、用户目录、各盘符根目录下名字含 `ida` 的一级目录，递归 6 层。
+1. `--ida PATH` (a file or an installation directory);
+2. the `IDADIR` environment variable;
+3. `ida64.exe` / `ida.exe` on `PATH`;
+4. first-level directories whose names contain `ida` under `Program Files`, `LOCALAPPDATA`, the user directory, and each drive root, searched recursively to depth 6.
 
-> 不做全盘遍历：只进入名字含 `ida` 的目录，`installers`、`Windows`、`Temp` 等会跳过，通常几十毫秒完成。装在奇怪路径时用 `--ida` 或 `IDADIR`。
+> No full-disk scan: only directories whose names contain `ida` are entered, while `installers`, `Windows`, `Temp`, etc. are skipped. This usually takes tens of milliseconds. If IDA is installed in an unusual location, use `--ida` or `IDADIR`.
 
-启动前会检查：目标文件存在、插件已安装（`ida-cli install`）、不是 IDA Free、Broker 可达。目标已经连着同一个实例时直接复用，`--force` 可强制再开一个。启动时带 IDA 的 `-A`（autonomous）参数，避免停在欢迎/打开文件对话框，插件会自动连接。启动后轮询 `/api/instances`，最多等 `--wait` 秒（默认 60，`0` 表示启动后立即返回），匹配到目标路径或唯一的新实例即输出 `connected: ...`。
+Before launching, `open` checks that the target exists, the plugin is installed (`ida-cli install`), IDA is not the Free edition, and the broker is reachable. If the same target is already connected, the existing instance is reused; `--force` launches another one. IDA is started with `-A` (autonomous mode) so it does not stop at the welcome/open-file dialog, and the plugin connects automatically. After launch, `open` polls `/api/instances` for up to `--wait` seconds (default 60; `0` returns immediately after launch) and prints `connected: ...` when it finds a matching path or a single new instance.
 
-`open` 只启动 GUI `ida.exe`（或旧版的 `ida64.exe`），不启动 `idat.exe`：本工具的通信依赖 IDA 内的 Python 插件，而文本模式没有插件菜单，无法完成连接和交互式分析。
+`open` launches only the GUI `ida.exe` (or `ida64.exe` on older releases), never `idat.exe`: this tool's communication depends on the Python plugin inside IDA, and text mode has no plugin menu, so it cannot connect or support interactive analysis.
 
+### Global flags (may appear before or after the subcommand)
 
-
-| 参数 | 环境变量 | 说明 |
+| Flag | Environment variable | Description |
 |---|---|---|
-| `--broker URL` | `IDA_MCP_BROKER_URL` | 默认 `http://127.0.0.1:13337` |
-| `--instance ID` | `IDA_MCP_INSTANCE_ID` | 接受 `instance_id` / `client_id` / `name` |
-| `--timeout SEC` | — | 默认 60 秒 |
-| `--pretty` | — | 缩进 2 空格输出 JSON |
-| `--max-bytes N` | — | 截断超大输出，不切断 UTF-8 rune |
+| `--broker URL` | `IDA_MCP_BROKER_URL` | default `http://127.0.0.1:13337` |
+| `--instance ID` | `IDA_MCP_INSTANCE_ID` | accepts `instance_id` / `client_id` / `name` |
+| `--timeout SEC` | — | default 60 seconds |
+| `--pretty` | — | indent JSON with 2 spaces |
+| `--max-bytes N` | — | truncate oversized output without splitting a UTF-8 rune |
 
-实例选择规则：显式 `--instance` > 唯一实例自动选择；0 个或多个且未指定时报错并列出候选。
+Instance selection: explicit `--instance` > automatic selection when there is exactly one instance; with zero or multiple instances and no explicit choice, it fails and lists the candidates.
 
-### 参数形态
+### Parameter shapes
 
-- `str` / `int` / `bool`：`--addr main`、`--limit 20`、`--include_asm`（可 `--include_asm=false`）。
-- `list[str] | str` 一类：`--addrs main,0x402000`，或重复 `--addrs a --addrs b`（重复时发送 JSON 数组）。
-- `list[TypedDict] | TypedDict`、`RenameBatch`、`TypeApplyBatch`、`dict`：必须传 JSON，支持 `--batch '{"..."}'` 或 `--batch @file.json`。
-- 不在快照中的新工具：`call <tool> --args-json '<json>'` 直接透传。
+- `str` / `int` / `bool`: `--addr main`, `--limit 20`, `--include_asm` (or `--include_asm=false`).
+- `list[str] | str` and similar: `--addrs main,0x402000`, or repeat `--addrs a --addrs b` (repeated flags are sent as a JSON array).
+- `list[TypedDict] | TypedDict`, `RenameBatch`, `TypeApplyBatch`, `dict`: must be JSON; use `--batch '{"..."}'` or `--batch @file.json`.
+- Tools not in the snapshot: pass them through with `call <tool> --args-json '<json>'`.
 
-## 退出码
+## Exit codes
 
-| 码 | 含义 |
+| Code | Meaning |
 |---|---|
-| 0 | 成功 |
-| 1 | 后端/工具错误、超时、`isError` |
-| 2 | 参数或用法错误 |
-| 3 | Broker 不可达、无实例、多实例未指定、实例不存在 |
+| 0 | success |
+| 1 | backend/tool error, timeout, `isError` |
+| 2 | argument or usage error |
+| 3 | broker unreachable, no instance, multiple instances without a selection, unknown instance |
 
-## 配套 Skill
+## Companion skill
 
-`skills/ida-cli/SKILL.md` 是给 agent 的薄使用指南，工具全量索引在 `skills/ida-cli/references/tools.md`（生成物）。
+`skills/ida-cli/SKILL.md` is a thin usage guide for agents; the full tool index lives in `skills/ida-cli/references/tools.md` (generated).
 
-安装到 Claude Code：
+Install into Claude Code:
 
 ```bash
-# 用户级
+# user-level
 cp -r skills/ida-cli ~/.claude/skills/
-# 或项目级
+# or project-level
 mkdir -p .claude/skills && cp -r skills/ida-cli .claude/skills/
 ```
 
-其他 agent 框架把 `skills/ida-cli/` 放到其 skills 根目录即可。确保 `ida-cli` 在 `PATH` 上。
+For other agent frameworks, drop `skills/ida-cli/` into their skills root. Make sure `ida-cli` is on `PATH`.
 
-## 与 MCP 客户端的关系
+## Relationship to MCP clients
 
-`ida-cli` 不实现 MCP 端点，也不要求 MCP 客户端。它会话里只保留 skill 的少量说明，87 个工具的 schema 通过 `tools` / `schema` 按需拉取。
+`ida-cli` does not implement an MCP endpoint and does not require an MCP client. In an agent session it keeps only the small skill text in context; schemas for the 87 tools are fetched on demand via `tools` / `schema`.
 
-如果仍然需要 MCP 客户端（Cursor / Claude Desktop 等），保留上游 Python 方案即可；也可以用 `ida-cli serve --exec ida-pro-mcp` 让 CLI 拉起外部 Python Broker，此时 CLI 与 MCP 客户端共享同一 Broker。
+If you still need an MCP client (Cursor / Claude Desktop, etc.), keep the upstream Python setup; alternatively, `ida-cli serve --exec ida-pro-mcp` makes the CLI launch the external Python broker, so the CLI and MCP clients share the same broker.
 
-## 更新插件
+## Updating the plugin
 
-插件源码快照编在 exe 里。升级 exe 后重新执行一次：
+The plugin source snapshot is compiled into the exe. After upgrading the exe, run once:
 
 ```bash
 ida-cli install
 ```
 
-`ida-cli version` 会显示内嵌快照的来源 commit 和生成时间，便于确认是否需要重装。
+`ida-cli version` shows the source commit and generation time of the embedded snapshot, so you can tell whether a reinstall is needed.
 
-## 工作原理
+## How it works
 
-1. `ida-cli install` 把内嵌的 `ida_mcp.py`、`ida_mcp/`、`broker/` 写入 IDA 用户插件目录。
-2. IDA 加载插件后，插件向 `ida-cli serve` 的 `/register` 注册，并打开 `/events` SSE 长连接。
-3. CLI 命令把 typed 子命令参数拼成 JSON-RPC，POST 到 `/api/request`。
-4. Go Broker 把请求作为 SSE `request` 事件推给插件；插件在 IDA 主线程执行后 POST `/response`。
-5. Broker 把响应返回 CLI；CLI 解包 `result.content[*].text` 并输出。
+1. `ida-cli install` writes the embedded `ida_mcp.py`, `ida_mcp/`, and `broker/` into IDA's user plugins directory.
+2. When IDA loads the plugin, it registers with `ida-cli serve` at `/register` and opens an SSE connection to `/events`.
+3. CLI commands turn typed subcommand arguments into JSON-RPC and POST them to `/api/request`.
+4. The Go broker pushes the request to the plugin as an SSE `request` event; the plugin executes it on IDA's main thread and POSTs `/response`.
+5. The broker returns the response to the CLI; the CLI unwraps `result.content[*].text` and prints it.
 
-`broker/` 在插件侧只保留 SQLite 静态缓存所需的四个模块；`broker/__init__.py` 由生成器写成空文件，避免插件进程导入上游的 Python Broker 服务端。缓存工具（`cache_status`、`refresh_cache` 等）仍由插件在 `tools/call` 之前拦截，Go Broker 不需要理解它们。
+On the plugin side, `broker/` keeps only the four modules needed for the SQLite static cache; the generator writes an empty `broker/__init__.py` so the plugin process does not import the upstream Python broker server. Cache tools (`cache_status`, `refresh_cache`, etc.) are still intercepted by the plugin before `tools/call`; the Go broker does not need to understand them.
 
-## 开发
+## Development
 
 ```bash
-make sync-plugin   # 上游插件变更后，重新拷贝内嵌 Python 快照
-make gen-catalog   # 上游工具变更后，重新生成 catalog 与 skill 索引
-make test          # broker 协议、插件安装、CLI 集成测试，无需 IDA
+make sync-plugin   # after upstream plugin changes, re-copy the embedded Python snapshot
+make gen-catalog   # after upstream tool changes, regenerate the catalog and skill index
+make test          # broker protocol, plugin install, CLI integration tests; no IDA needed
 make vet
 make build
 ```
 
-测试覆盖：Broker 注册/SSE/回包/超时/多实例/重连替换/断连失败在途请求；插件安装、覆盖安装、卸载；CLI 的实例选择、输出截断、离线发现命令。
+Test coverage: broker registration/SSE/response/timeout/multi-instance/reconnect replacement/in-flight failure on disconnect; plugin install, overwrite install, uninstall; CLI instance selection, output truncation, offline discovery commands.
 
-## 已知限制
+## Known limitations
 
-- **IDA 插件仍是 Python**。IDA 没有可从外部嵌入的远程 API，这部分无法编进 Go。
-- **只支持 GUI IDA 插件模式**。无头 `idalib` 需要 Python `idapro` 和另一套 MCP 服务，未包含在本工具中。
-- **IDA Free 不支持插件**。`install` 检测到 `idafree_*.hexlic` 会拒绝，除非显式 `--allow-ida-free`。
-- catalog 是快照。极少数新增工具的参数不会出现在 typed 子命令里，用 `call --args-json` 兜底。
-- 全局参数名是保留字：`--broker`、`--instance`、`--timeout`、`--pretty`、`--max-bytes`。上游若新增同名工具参数，需要用 `call --args-json` 传入。
-- 不做粘性实例选择、多实例并发编排、JSON-RPC 批处理/订阅。
-- 不提供 MCP 端点；需要 MCP 客户端时使用上游 Python Broker（`serve --exec`）。
+- **The IDA plugin is still Python.** IDA has no embeddable remote API from outside, so this part cannot be compiled into Go.
+- **GUI IDA plugin mode only.** Headless `idalib` requires Python `idapro` and a different MCP server; it is not included in this tool.
+- **IDA Free does not support plugins.** `install` refuses when it detects `idafree_*.hexlic`, unless `--allow-ida-free` is passed explicitly.
+- The catalog is a snapshot. Parameters of the rare newly added tools will not appear in typed subcommands; use `call --args-json` as a fallback.
+- Global flag names are reserved: `--broker`, `--instance`, `--timeout`, `--pretty`, `--max-bytes`. If upstream adds a tool parameter with the same name, pass it via `call --args-json`.
+- No sticky instance selection, multi-instance concurrency orchestration, or JSON-RPC batching/subscriptions.
+- No MCP endpoint; when you need an MCP client, use the upstream Python broker (`serve --exec`).
 
-## 许可
+## Acknowledgements
 
-CLI 与 Go Broker 代码独立实现。IDA 插件快照抽取自 [ida-pro-mcp-enhancement](https://github.com/QiuChenly/ida-pro-mcp-enhancement)（MIT），`internal/plugin/assets/manifest.json` 与 `catalog.json` 中保留了来源路径、commit 与生成时间。
+This project's overall approach, tool set, and protocol design owe a great deal to the following open-source projects:
+
+- [QiuChenly/ida-pro-mcp-enhancement](https://github.com/QiuChenly/ida-pro-mcp-enhancement): The plugin snapshot and tool catalog in this project are extracted directly from it. Its broker-only routing architecture, client-side SQLite static-cache takeover, and strictly typed protocol were the most important references when redesigning the command line and embedded broker for `ida-cli`.
+- [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp): The original upstream project, which provides the foundation for the IDA plugin architecture, tool semantics, and MCP resource model.
+
+We sincerely thank **QiuChenly**, **mrexodia**, and all contributors to both projects. `ida-cli` would not exist without their work. If this tool helps your research or product, please also support and credit these projects and their authors.
+
+## License
+
+The CLI and Go broker are independent implementations. The IDA plugin snapshot is extracted from [ida-pro-mcp-enhancement](https://github.com/QiuChenly/ida-pro-mcp-enhancement) (MIT); the source path, commit, and generation time are preserved in `internal/plugin/assets/manifest.json` and `catalog.json`.
