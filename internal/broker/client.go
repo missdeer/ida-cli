@@ -28,7 +28,7 @@ var ErrUnreachable = errors.New("broker unreachable")
 // target instance disappeared mid-flight).
 var ErrTimeout = errors.New("request timed out")
 
-// Instance mirrors broker/server.py IDAInstance.to_dict().
+// Instance describes one connected IDA instance.
 type Instance struct {
 	ClientID   string `json:"client_id"`
 	InstanceID string `json:"instance_id"`

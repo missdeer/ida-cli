@@ -20,7 +20,7 @@ description: 通过 ida-cli 命令行客户端驱动 IDA Pro 做逆向分析：�
 
 ## 前置条件
 
-一次性安装（由 exe 自带插件，不需要 pip / Python Broker）：
+一次性安装（由 exe 自带插件，不需要 pip）：
 
 ```bash
 ida-cli install          # 写入 IDA 用户插件目录

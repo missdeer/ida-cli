@@ -4,7 +4,7 @@
 
 A single-binary Go executable: **command-line client + embedded broker + IDA plugin installer**.
 
-Users only need the one file `ida-cli.exe`. It replaces the previously separate Python broker, MCP routing layer, and CLI, and writes its own embedded IDA plugin into IDA's user plugins directory. At runtime only two pieces remain:
+Users only need the one file `ida-cli.exe`. It provides the command-line client and an embedded broker, and writes its own embedded IDA plugin into IDA's user plugins directory. At runtime only the executable and the in-IDA plugin matter:
 
 ```
 Agent / terminal --bash--> ida-cli.exe
@@ -22,7 +22,7 @@ Agent / terminal --bash--> ida-cli.exe
 | IDA plugin | `%APPDATA%\Hex-Rays\IDA Pro\plugins` | written by `ida-cli install`; runs inside IDA |
 | Python | bundled with IDA | used only inside the IDA process; no pip install needed |
 
-No Python broker, no MCP client configuration, and no `pip install ida-pro-mcp` required.
+No MCP client configuration and no `pip install` required.
 
 ## Hard boundary
 
@@ -33,21 +33,6 @@ IDA does not expose an embeddable remote API from outside. Code that actually ca
 - the plugin files themselves (`go:embed`).
 
 So "one exe" precisely means: **one executable handles deployment and driving, and it auto-installs the IDA-side code**. IDA remains the host, and Python is still provided by IDA.
-
-## Why drop the Python broker
-
-In the original architecture, the Python broker did four things: register IDA instances, push JSON-RPC to the plugin over SSE, wait for the plugin's reply, and expose query endpoints to the CLI. None of that is IDA-specific, and it has been reimplemented in Go in `internal/broker/server.go`, wire-compatible with the upstream `broker/server.py`:
-
-```text
-POST /register     plugin registration, returns client_id
-GET  /events       SSE: connected / request / ping
-POST /response     plugin reply
-POST /api/request  CLI request, supports instance_id and timeout
-GET  /api/instances
-GET  /status
-```
-
-Reconnecting with the same `instance_id` replaces the old connection; multiple instances must be selected explicitly; timeouts return `{"response": null}`; a disconnected instance fails in-flight requests immediately. These behaviors match upstream.
 
 ## Build
 
@@ -93,7 +78,7 @@ ida-cli [global flags] <command>
 Deployment and runtime:
   install [--dir PATH]         install the embedded IDA plugin (default: IDA user plugins dir)
   uninstall [--dir PATH]       uninstall the plugin
-  serve [--host H] [--port N]  start the embedded broker (no Python broker / MCP)
+  serve [--host H] [--port N]  start the embedded broker (no MCP server)
   open <binary|idb> [--ida PATH] [--wait 60] [--force] [--dry-run]
                                find IDA, launch the GUI, and load the target
   doctor                       check broker, instances, plugin install, and IDA executable
@@ -181,8 +166,6 @@ For other agent frameworks, drop `skills/ida-cli/` into their skills root. Make 
 
 `ida-cli` does not implement an MCP endpoint and does not require an MCP client. In an agent session it keeps only the small skill text in context; schemas for the 87 tools are fetched on demand via `tools` / `schema`.
 
-If you still need an MCP client (Cursor / Claude Desktop, etc.), keep the upstream Python setup; alternatively, `ida-cli serve --exec ida-pro-mcp` makes the CLI launch the external Python broker, so the CLI and MCP clients share the same broker.
-
 ## Updating the plugin
 
 The plugin source snapshot is compiled into the exe. After upgrading the exe, run once:
@@ -201,7 +184,9 @@ ida-cli install
 4. The Go broker pushes the request to the plugin as an SSE `request` event; the plugin executes it on IDA's main thread and POSTs `/response`.
 5. The broker returns the response to the CLI; the CLI unwraps `result.content[*].text` and prints it.
 
-On the plugin side, `broker/` keeps only the four modules needed for the SQLite static cache; the generator writes an empty `broker/__init__.py` so the plugin process does not import the upstream Python broker server. Cache tools (`cache_status`, `refresh_cache`, etc.) are still intercepted by the plugin before `tools/call`; the Go broker does not need to understand them.
+Reconnecting with the same `instance_id` replaces the old connection; multiple instances must be selected explicitly; timeouts return `{"response": null}`; a disconnected instance fails in-flight requests immediately.
+
+On the plugin side, `broker/` keeps only the four modules needed for the SQLite static cache; the generator writes an empty `broker/__init__.py`. Cache tools (`cache_status`, `refresh_cache`, etc.) are still intercepted by the plugin before `tools/call`; the Go broker does not need to understand them.
 
 ## Development
 
@@ -223,7 +208,7 @@ Test coverage: broker registration/SSE/response/timeout/multi-instance/reconnect
 - The catalog is a snapshot. Parameters of the rare newly added tools will not appear in typed subcommands; use `call --args-json` as a fallback.
 - Global flag names are reserved: `--broker`, `--instance`, `--timeout`, `--pretty`, `--max-bytes`. If upstream adds a tool parameter with the same name, pass it via `call --args-json`.
 - No sticky instance selection, multi-instance concurrency orchestration, or JSON-RPC batching/subscriptions.
-- No MCP endpoint; when you need an MCP client, use the upstream Python broker (`serve --exec`).
+- No MCP endpoint; use the CLI or the companion skill directly.
 
 ## Acknowledgements
 

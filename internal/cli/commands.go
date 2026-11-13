@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -410,9 +409,8 @@ func (a *app) cmdServe(args []string) int {
 	fs.SetOutput(a.stderr)
 	host := fs.String("host", "127.0.0.1", "listen address")
 	port := fs.Int("port", 13337, "broker port (0 picks a free port)")
-	execPath := fs.String("exec", "", "legacy: run an external broker executable instead")
 	fs.Usage = func() {
-		fmt.Fprintln(a.stderr, "Usage: ida-cli serve [--host 127.0.0.1] [--port 13337] [--exec PATH]")
+		fmt.Fprintln(a.stderr, "Usage: ida-cli serve [--host 127.0.0.1] [--port 13337]")
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -427,9 +425,6 @@ func (a *app) cmdServe(args []string) int {
 	if *port < 0 || *port > 65535 {
 		fmt.Fprintf(a.stderr, "ida-cli: --port must be between 0 and 65535, got %d\n", *port)
 		return exitUsage
-	}
-	if *execPath != "" {
-		return a.serveExternal(*execPath, *port)
 	}
 
 	srv := broker.NewServer(*host, *port, func(format string, values ...any) {
@@ -457,7 +452,7 @@ func (a *app) cmdServe(args []string) int {
 	}
 
 	fmt.Fprintf(a.stdout, "ida-cli broker listening on %s\n", srv.URL())
-	fmt.Fprintln(a.stdout, "  embedded Go broker: no Python broker and no MCP server involved")
+	fmt.Fprintln(a.stdout, "  embedded Go broker; no MCP server involved")
 	if dir, err := plugin.DefaultPluginsDir(); err == nil && !plugin.Check(dir).Installed {
 		fmt.Fprintf(a.stdout, "  warning: IDA plugin not installed at %s\n", dir)
 		fmt.Fprintln(a.stdout, "           run: ida-cli install")
@@ -476,31 +471,6 @@ func (a *app) cmdServe(args []string) int {
 		return exitError
 	}
 	fmt.Fprintln(a.stderr, "ida-cli: broker stopped")
-	return exitOK
-}
-
-// serveExternal keeps the pre-0.2 behavior for users who still want the
-// Python broker (for example while an MCP client is configured).
-func (a *app) serveExternal(path string, port int) int {
-	resolved, err := exec.LookPath(path)
-	if err != nil {
-		fmt.Fprintf(a.stderr, "ida-cli: cannot find external broker executable %q\n", path)
-		fmt.Fprintln(a.stderr, "  the embedded broker is the default; omit --exec to use it")
-		return exitUnavailable
-	}
-
-	cmd := exec.Command(resolved, "--broker", "--port", strconv.Itoa(port))
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode()
-		}
-		return a.fail(err)
-	}
 	return exitOK
 }
 
@@ -614,7 +584,7 @@ Usage:
 Setup:
   install [--dir PATH]      install the embedded IDA plugin (one time)
   uninstall [--dir PATH]    remove the embedded IDA plugin
-  serve [--host H] [--port N]  start the embedded broker (no Python broker/MCP)
+  serve [--host H] [--port N]  start the embedded broker (no MCP server)
   open <binary> [--ida PATH]   launch GUI IDA, load a file, wait for the plugin
   doctor                    check broker, IDA, instances and plugin installation
 

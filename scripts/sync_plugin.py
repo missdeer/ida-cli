@@ -2,8 +2,8 @@
 """Copy the IDA-side Python plugin into internal/plugin/assets for go:embed.
 
 Dev-time only. The Go binary ships this snapshot and writes it into IDA's
-user plugins directory via `ida-cli install`, so end users need neither the
-`ida-pro-mcp` package nor a Python broker.
+user plugins directory via `ida-cli install`, so end users do not need the
+`ida-pro-mcp` package.
 
 What is copied:
   ida_mcp.py                     plugin loader
@@ -44,9 +44,8 @@ BROKER_MODULES = (
 
 BROKER_INIT = '''"""Trimmed broker package shipped with the IDA plugin.
 
-Upstream broker/__init__.py imports the Python broker server
-(BrokerClient / IDAHttpServer). ida-cli replaces that server with an embedded
-Go broker, so the plugin process only needs the SQLite cache modules.
+The plugin only needs the SQLite cache modules; request routing is provided
+by the embedded Go broker.
 """
 '''
 

@@ -24,7 +24,7 @@ func TestEmbeddedAssets(t *testing.T) {
 		t.Fatalf("broker init: %v", err)
 	}
 	if strings.Contains(string(initFile), "from .server") || strings.Contains(string(initFile), "from .client") {
-		t.Fatal("embedded broker/__init__.py still imports the Python broker server")
+		t.Fatal("embedded broker/__init__.py still imports server modules")
 	}
 	for _, path := range []string{
 		"assets/broker/cache_handlers.py",

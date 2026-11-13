@@ -2,8 +2,7 @@ package broker
 
 // Embedded Go implementation of the IDA MCP Broker.
 //
-// It is wire-compatible with src/ida_pro_mcp/broker/server.py, so the
-// existing IDA plugin works unchanged:
+// The IDA plugin communicates with it using this protocol:
 //
 //	POST /register     plugin -> broker, returns {"success":true,"client_id":"..."}
 //	GET  /events       SSE stream of {"request_id","request"} events + pings
@@ -475,8 +474,7 @@ func (s *Server) listInstances() []Instance {
 }
 
 // sendRequest routes one JSON-RPC request and waits for the plugin's response.
-// A nil return means timeout; routing errors are JSON-RPC error objects, which
-// mirrors the Python broker.
+// A nil return means timeout; routing errors are JSON-RPC error objects.
 func (s *Server) sendRequest(request json.RawMessage, instanceID string, timeout time.Duration) json.RawMessage {
 	requestIDJSON := extractRequestID(request)
 

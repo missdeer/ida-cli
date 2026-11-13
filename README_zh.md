@@ -4,7 +4,7 @@
 
 一个 Go 单文件可执行程序：**命令行客户端 + 内嵌 Broker + IDA 插件安装器**。
 
-用户侧只需要 `ida-cli.exe` 这一个文件。它把原来分散的 Python Broker、MCP 路由层和 CLI 合并掉，并把自己内嵌的 IDA 插件写入 IDA 的用户插件目录。运行时只剩两样东西：
+用户侧只需要 `ida-cli.exe` 这一个文件。它同时提供命令行客户端和内嵌 Broker，并把自己内嵌的 IDA 插件写入 IDA 的用户插件目录。运行时只需要 exe 和 IDA 内的插件：
 
 ```
 Agent / 终端 --bash--> ida-cli.exe
@@ -22,7 +22,7 @@ Agent / 终端 --bash--> ida-cli.exe
 | IDA 插件 | `%APPDATA%\Hex-Rays\IDA Pro\plugins` | 由 `ida-cli install` 写入；运行在 IDA 内 |
 | Python | IDA 自带 | 只在 IDA 进程内使用，不需要 pip 安装任何东西 |
 
-不需要 Python Broker，不需要 MCP 客户端配置，也不需要 `pip install ida-pro-mcp`。
+不需要 MCP 客户端配置，也不需要 `pip install`。
 
 ## 硬边界
 
@@ -33,21 +33,6 @@ IDA 不提供可从外部嵌入的远程 API。真正调用 IDA SDK 的代码必
 - 插件文件本身（`go:embed`）。
 
 所以“一个 exe”的准确含义是：**一个可执行文件完成部署和驱动，IDA 侧代码由它自动安装**。IDA 仍然是宿主，Python 仍由 IDA 提供。
-
-## 为什么省掉 Python Broker
-
-原架构里 Python Broker 只做四件事：登记 IDA 实例、用 SSE 把 JSON-RPC 推给插件、等待插件回包、给 CLI 提供查询接口。这些逻辑与 IDA 无关，已用 Go 在 `internal/broker/server.go` 中等价实现，协议与上游 `broker/server.py` 完全兼容：
-
-```text
-POST /register     插件注册，返回 client_id
-GET  /events       SSE：connected / request / ping
-POST /response     插件回包
-POST /api/request  CLI 发请求，支持 instance_id 与 timeout
-GET  /api/instances
-GET  /status
-```
-
-同一 `instance_id` 重连会替换旧连接；多实例必须显式指定；超时返回 `{"response": null}`；实例断开会让在途请求立即失败。这些行为与上游一致。
 
 ## 构建
 
@@ -93,7 +78,7 @@ ida-cli [全局参数] <命令>
 部署与运行：
   install [--dir PATH]         安装内嵌 IDA 插件（默认 IDA 用户插件目录）
   uninstall [--dir PATH]       卸载插件
-  serve [--host H] [--port N]  启动内嵌 Broker（无 Python Broker / MCP）
+  serve [--host H] [--port N]  启动内嵌 Broker（无 MCP 服务）
   open <binary|idb> [--ida PATH] [--wait 60] [--force] [--dry-run]
                                自动找到 IDA、启动 GUI 并加载目标文件
   doctor                       体检 Broker、实例、插件安装、IDA 可执行文件
@@ -181,8 +166,6 @@ mkdir -p .claude/skills && cp -r skills/ida-cli .claude/skills/
 
 `ida-cli` 不实现 MCP 端点，也不要求 MCP 客户端。它会话里只保留 skill 的少量说明，87 个工具的 schema 通过 `tools` / `schema` 按需拉取。
 
-如果仍然需要 MCP 客户端（Cursor / Claude Desktop 等），保留上游 Python 方案即可；也可以用 `ida-cli serve --exec ida-pro-mcp` 让 CLI 拉起外部 Python Broker，此时 CLI 与 MCP 客户端共享同一 Broker。
-
 ## 更新插件
 
 插件源码快照编在 exe 里。升级 exe 后重新执行一次：
@@ -201,7 +184,9 @@ ida-cli install
 4. Go Broker 把请求作为 SSE `request` 事件推给插件；插件在 IDA 主线程执行后 POST `/response`。
 5. Broker 把响应返回 CLI；CLI 解包 `result.content[*].text` 并输出。
 
-`broker/` 在插件侧只保留 SQLite 静态缓存所需的四个模块；`broker/__init__.py` 由生成器写成空文件，避免插件进程导入上游的 Python Broker 服务端。缓存工具（`cache_status`、`refresh_cache` 等）仍由插件在 `tools/call` 之前拦截，Go Broker 不需要理解它们。
+同一 `instance_id` 重连会替换旧连接；多实例必须显式指定；超时返回 `{"response": null}`；实例断开会让在途请求立即失败。
+
+`broker/` 在插件侧只保留 SQLite 静态缓存所需的四个模块；`broker/__init__.py` 由生成器写成空文件。缓存工具（`cache_status`、`refresh_cache` 等）仍由插件在 `tools/call` 之前拦截，Go Broker 不需要理解它们。
 
 ## 开发
 
@@ -223,7 +208,7 @@ make build
 - catalog 是快照。极少数新增工具的参数不会出现在 typed 子命令里，用 `call --args-json` 兜底。
 - 全局参数名是保留字：`--broker`、`--instance`、`--timeout`、`--pretty`、`--max-bytes`。上游若新增同名工具参数，需要用 `call --args-json` 传入。
 - 不做粘性实例选择、多实例并发编排、JSON-RPC 批处理/订阅。
-- 不提供 MCP 端点；需要 MCP 客户端时使用上游 Python Broker（`serve --exec`）。
+- 不提供 MCP 端点；直接使用 CLI 或配套 skill。
 
 ## 致谢
 
