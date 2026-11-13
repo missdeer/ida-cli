@@ -1,0 +1,5 @@
+/ida-cli
+/ida-cli.exe
+/dist/
+*.test
+__pycache__/

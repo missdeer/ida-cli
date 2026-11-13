@@ -1,0 +1,7 @@
+{
+  "source": "../ida-pro-mcp-enhancement",
+  "commit": "f4754e4",
+  "generated_at": "2026-11-13T06:08:27+00:00",
+  "files": 34,
+  "note": "broker/ is trimmed to the SQLite cache modules; broker/__init__.py is intentionally empty"
+}
